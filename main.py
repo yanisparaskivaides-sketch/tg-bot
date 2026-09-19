@@ -10,7 +10,7 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 
 # ---------- НАСТРОЙКИ ----------
 BOT_TOKEN = "8822110606:AAEE0ps4NI5XK4YoGJrxOYSK1BCSk3LxBik"    # токен бота (из @BotFather)
-ADMIN_CHAT_ID = 1003709542377  # ID канала/чата, куда слать заявки
+ADMIN_CHAT_ID = -1003709542377  # ID канала/чата, куда слать заявки
 
 if not BOT_TOKEN:
     raise ValueError("Не задан BOT_TOKEN в переменных окружения!")
