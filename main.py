@@ -6,7 +6,7 @@ import csv
 import io
 import sqlite3
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -18,6 +18,7 @@ from aiogram.types import (
     BufferedInputFile
 )
 
+# ═══════════════ КОНФИГ ═══════════════
 BOT_TOKEN = "8822110606:AAEE0ps4NI5XK4YoGJrxOYSK1BCSk3LxBik"
 ADMIN_CHAT_ID = -1003709542377
 
@@ -29,20 +30,18 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 DB_PATH = "/tmp/applications.db"
-ADMINS = set()  # если хочешь ограничить админ-команды — впиши ID через запятую
+
+MIN_AGE = 14
+MIN_ONLINE = 3
+MIN_BIO_SENT = 5
+MIN_BIO_LEN = 200
 
 
-# ═══════════════════════════════════════════
-#                  УТИЛИТЫ
-# ═══════════════════════════════════════════
+# ═══════════════ УТИЛИТЫ ═══════════════
 def esc(s) -> str:
-    """Экранирование HTML."""
     if s is None:
         return ""
-    return (str(s)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;"))
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def now_str() -> str:
@@ -53,9 +52,11 @@ def divider() -> str:
     return "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 
-# ═══════════════════════════════════════════
-#                  БАЗА
-# ═══════════════════════════════════════════
+def count_sentences(text: str) -> int:
+    return len(re.findall(r"[.!?]+", text))
+
+
+# ═══════════════ БАЗА ═══════════════
 def init_db():
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -78,7 +79,7 @@ def init_db():
         """)
         conn.commit()
         conn.close()
-        logging.info("DB initialized OK")
+        logging.info("DB ready")
     except Exception as e:
         logging.error(f"DB init error: {e}")
 
@@ -110,7 +111,7 @@ def save_application(user, data, verdict, reason):
         cur.execute(
             "INSERT INTO applications "
             "(telegram_id, username, nickname, discord, age, online, "
-            "bio_sentences, bio_length, verdict, reason, applied_at) "
+            " bio_sentences, bio_length, verdict, reason, applied_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (user.id, user.username or "",
              data["nickname"], data["discord"],
@@ -125,37 +126,40 @@ def save_application(user, data, verdict, reason):
 
 
 def get_stats() -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM applications")
-    total = cur.fetchone()[0] or 0
-    cur.execute("SELECT COUNT(*) FROM applications WHERE verdict='ОТКАЗ'")
-    rejected = cur.fetchone()[0] or 0
-    cur.execute("SELECT COUNT(*) FROM applications WHERE verdict='ПРИНЯТА'")
-    accepted = cur.fetchone()[0] or 0
-    today = datetime.now().strftime("%Y-%m-%d")
-    cur.execute("SELECT COUNT(*) FROM applications WHERE applied_at LIKE ?", (f"{today}%",))
-    today_count = cur.fetchone()[0] or 0
-    conn.close()
-    return {
-        "total": total,
-        "rejected": rejected,
-        "accepted": accepted,
-        "today": today_count
-    }
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM applications")
+        total = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM applications WHERE verdict='ОТКАЗ'")
+        rej = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM applications WHERE verdict='ПРИНЯТА'")
+        acc = cur.fetchone()[0] or 0
+        today = datetime.now().strftime("%Y-%m-%d")
+        cur.execute("SELECT COUNT(*) FROM applications WHERE applied_at LIKE ?", (f"{today}%",))
+        t = cur.fetchone()[0] or 0
+        conn.close()
+        return {"total": total, "rejected": rej, "accepted": acc, "today": t}
+    except Exception as e:
+        logging.error(f"get_stats error: {e}")
+        return {"total": 0, "rejected": 0, "accepted": 0, "today": 0}
 
 
-def get_top(limit=10) -> list:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT nickname, discord, applied_at FROM applications "
-        "WHERE verdict='ПРИНЯТА' ORDER BY id DESC LIMIT ?",
-        (limit,)
-    )
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+def get_top(limit=10):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT nickname, discord, applied_at FROM applications "
+            "WHERE verdict='ПРИНЯТА' ORDER BY id DESC LIMIT ?",
+            (limit,)
+        )
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logging.error(f"get_top error: {e}")
+        return []
 
 
 def export_csv() -> bytes:
@@ -168,37 +172,30 @@ def export_csv() -> bytes:
     """)
     rows = cur.fetchall()
     conn.close()
-
     buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
-    writer.writerow([
-        "ID", "TG_ID", "Username", "Nickname", "Discord",
-        "Age", "Online", "Bio_sentences", "Bio_length", "Verdict", "Applied_at"
-    ])
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["ID", "TG_ID", "Username", "Nickname", "Discord",
+                "Age", "Online", "Bio_sentences", "Bio_length", "Verdict", "Applied_at"])
     for r in rows:
-        writer.writerow(r)
+        w.writerow(r)
     return buf.getvalue().encode("utf-8")
 
 
 init_db()
 
 
-# ═══════════════════════════════════════════
-#                СОСТОЯНИЯ
-# ═══════════════════════════════════════════
+# ═══════════════ СОСТОЯНИЯ ═══════════════
 class Check(StatesGroup):
-    waiting_application = State()
+    waiting = State()
 
 
-# ═══════════════════════════════════════════
-#               КЛАВИАТУРЫ
-# ═══════════════════════════════════════════
+# ═══════════════ КЛАВИАТУРЫ ═══════════════
 def main_kb():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📝 Проверить заявку")],
             [KeyboardButton(text="📊 Статистика"), KeyboardButton(text="🏆 Топ")],
-            [KeyboardButton(text="📖 Инструкция")]
+            [KeyboardButton(text="📖 Инструкция")],
         ],
         resize_keyboard=True
     )
@@ -212,13 +209,12 @@ def cancel_kb():
 
 
 def admin_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Принять", callback_data="accept"),
-        InlineKeyboardButton(text="❌ Отклонить", callback_data="reject"),
-    ], [
-        InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
-        InlineKeyboardButton(text="🏆 Топ", callback_data="top"),
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Принять", callback_data="accept"),
+         InlineKeyboardButton(text="❌ Отклонить", callback_data="reject")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats"),
+         InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
+    ])
 
 
 def back_menu_kb():
@@ -227,59 +223,78 @@ def back_menu_kb():
     ]])
 
 
-# ═══════════════════════════════════════════
-#               ПАРСЕР
-# ═══════════════════════════════════════════
+# ═══════════════ ПАРСЕР ═══════════════
 def parse_application(text: str) -> dict:
+    """Извлекает поля из текста заявки."""
     lower = text.lower()
+    lines = text.splitlines()
     data = {}
 
-    # Ник
+    # --- Ник ---
     m = re.search(r"(?:ник\s*name|nickname|ник)[:\s]*([^\n]+)", text, re.IGNORECASE)
     data["nickname"] = m.group(1).strip() if m else ""
 
-    # Discord
+    # --- Discord ---
     m = re.search(r"(?:discord|дискорд)[:\s]*([^\n]+)", text, re.IGNORECASE)
     data["discord"] = m.group(1).strip() if m else ""
 
-    # Реальный возраст — только из строки со словом "возраст"
+    # --- ВОЗРАСТ: ТОЛЬКО из строки "Ваше реальное имя и возраст" ---
     age = None
-    for line in text.splitlines():
-        if re.search(r"возраст", line, re.IGNORECASE):
-            m = re.search(r"(\d{1,2})", line)
-            if m:
-                age = int(m.group(1))
+    for line in lines:
+        low = line.lower()
+        # ищем строку, где есть "реальное имя" И "возраст" — это пункт "Ваше реальное имя и возраст:"
+        if ("реальн" in low and "возраст" in low) or re.search(r"имя\s*и\s*возраст", low):
+            # берём все числа из строки и выбираем то, что может быть возрастом (10-99)
+            nums = re.findall(r"\b(\d{1,2})\b", line)
+            for n in nums:
+                if 10 <= int(n) <= 99:
+                    age = int(n)
+                    break
+            if age:
                 break
+    # fallback: если не нашли "реальное имя и возраст", ищем отдельный пункт "возраст:"
+    if age is None:
+        for line in lines:
+            low = line.lower()
+            if re.match(r"\s*(?:ваш[а-я]*\s*)?(?:реальн[а-я]*\s*)?возраст\s*[:\-]", low):
+                nums = re.findall(r"\b(\d{1,2})\b", line)
+                for n in nums:
+                    if 10 <= int(n) <= 99:
+                        age = int(n)
+                        break
+                if age:
+                    break
     data["age"] = age
 
-    # Онлайн — из строки со словом "онлайн"
+    # --- ОНЛАЙН: только из строки со словом "онлайн" ---
     online = None
-    for line in text.splitlines():
+    for line in lines:
         if re.search(r"онлайн", line, re.IGNORECASE):
-            m = re.search(r"(\d{1,2})\s*(?:час|ч\.|hours?)", line, re.IGNORECASE)
-            if not m:
-                m = re.search(r"(\d{1,2})", line)
-            if m:
-                online = int(m.group(1))
+            nums = re.findall(r"\b(\d{1,2})\b", line)
+            if nums:
+                # берём самое большое число из строки (обычно "3-8" → 8, "5 часов" → 5)
+                online = max(int(n) for n in nums)
                 break
     data["online"] = online
 
-    # Био
-    bio_match = re.search(
-        r"биограф[^\n]*[:\n]+(.*?)(?=\n\s*\n|\n[А-ЯЁA-Z][^\n]{0,40}:|$)",
+    # --- БИО ---
+    bio = ""
+    m = re.search(
+        r"биограф[^\n]*[:\n]+(.*?)(?=\n\s*\n|\n[А-ЯЁA-Z][^\n]{0,60}:|\Z)",
         text, re.DOTALL | re.IGNORECASE
     )
-    bio = bio_match.group(1).strip() if bio_match else ""
+    if m:
+        bio = m.group(1).strip()
     data["bio"] = bio
-    data["bio_sentences"] = len(re.findall(r"[.!?]+", bio))
+    data["bio_sentences"] = count_sentences(bio)
     data["bio_length"] = len(bio)
 
-    # Обязательные пункты
+    # --- Обязательные пункты ---
     required = {
         "NickName": r"ник\s*name|nickname|ник",
         "Скриншот статистики": r"скриншот|статистик|imgur|yapix|номер аккаунта",
         "Биография": r"биограф",
-        "Реальный возраст": r"реальн\w*\s*(?:имя|возраст)|возраст",
+        "Реальное имя и возраст": r"реальн\w*\s*имя|имя\s*и\s*возраст",
         "Локация": r"стран|город|часов\w*\s*пояс",
         "Онлайн": r"онлайн",
         "Discord": r"discord|дискорд",
@@ -289,10 +304,8 @@ def parse_application(text: str) -> dict:
     return data
 
 
-# ═══════════════════════════════════════════
-#                ВЕРДИКТ
-# ═══════════════════════════════════════════
-def make_verdict(data: dict, duplicate) -> tuple:
+# ═══════════════ ВЕРДИКТ ═══════════════
+def make_verdict(data, duplicate) -> tuple:
     reasons = []
 
     if duplicate and len(duplicate) >= 4:
@@ -302,25 +315,26 @@ def make_verdict(data: dict, duplicate) -> tuple:
             f"{esc(duplicate[2])}, статус: {esc(duplicate[3])}"
         )
 
-    if data["bio_sentences"] < 5:
+    if data["bio_sentences"] < MIN_BIO_SENT:
         reasons.append(
-            f"📝 <b>НРП био</b> — только <b>{data['bio_sentences']}</b> предложений (нужно 5+)"
+            f"📝 <b>НРП био</b> — только <b>{data['bio_sentences']}</b> предложений "
+            f"(нужно {MIN_BIO_SENT}+)"
         )
-    elif data["bio_length"] < 200:
+    elif data["bio_length"] < MIN_BIO_LEN:
         reasons.append(
             f"📝 <b>НРП био</b> — слишком короткая "
-            f"(<b>{data['bio_length']}</b> символов, нужно 200+)"
+            f"(<b>{data['bio_length']}</b> символов, нужно {MIN_BIO_LEN}+)"
         )
 
     if data["age"] is None:
-        reasons.append("🎂 <b>Реальный возраст не указан</b>")
-    elif data["age"] < 14:
-        reasons.append(f"🎂 <b>Возраст {data['age']}</b> — меньше 14")
+        reasons.append("🎂 <b>Возраст не указан</b> в пункте «Ваше реальное имя и возраст»")
+    elif data["age"] < MIN_AGE:
+        reasons.append(f"🎂 <b>Возраст {data['age']}</b> — меньше {MIN_AGE}")
 
     if data["online"] is None:
         reasons.append("⏰ <b>Онлайн не указан</b>")
-    elif data["online"] < 3:
-        reasons.append(f"⏰ <b>Онлайн {data['online']} ч</b> — меньше 3")
+    elif data["online"] < MIN_ONLINE:
+        reasons.append(f"⏰ <b>Онлайн {data['online']} ч</b> — меньше {MIN_ONLINE}")
 
     if data["missing"]:
         reasons.append("📋 <b>Отсутствуют пункты:</b> " + ", ".join(data["missing"]))
@@ -330,10 +344,8 @@ def make_verdict(data: dict, duplicate) -> tuple:
     return "🟢", ["Все критерии пройдены ✅"], "ПРИНЯТА"
 
 
-# ═══════════════════════════════════════════
-#            ФОРМИРОВАНИЕ КАРТОЧКИ
-# ═══════════════════════════════════════════
-def build_result_card(data, reasons, status, emoji):
+# ═══════════════ КАРТОЧКА ═══════════════
+def build_card(data, reasons, status, emoji):
     header = (
         "╔════════════════════════════╗\n"
         f"     {emoji} <b>{status}</b>\n"
@@ -348,17 +360,14 @@ def build_result_card(data, reasons, status, emoji):
         f"  └ Био: <b>{data['bio_sentences']}</b> предл. / <b>{data['bio_length']}</b> симв.\n\n"
     )
     if status == "ОТКАЗ":
-        reasons_block = "❌ <b>ПРИЧИНЫ ОТКАЗА:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
+        rb = "❌ <b>ПРИЧИНЫ ОТКАЗА:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
     else:
-        reasons_block = "✅ <b>ВСЁ ПРОШЛО:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
-
+        rb = "✅ <b>ВСЁ ПРОШЛО:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
     footer = f"\n{divider()}\n🤖 <i>Решение вынесено автоматически по формальным критериям.</i>"
-    return header + info_block + reasons_block + footer
+    return header + info_block + rb + footer
 
 
-# ═══════════════════════════════════════════
-#                СТАРТ
-# ═══════════════════════════════════════════
+# ═══════════════ СТАРТ ═══════════════
 @dp.message(CommandStart())
 async def start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -368,82 +377,78 @@ async def start(message: types.Message, state: FSMContext):
         "╚════════════════════════════╝\n\n"
         "👋 Привет! Я автоматически проверяю заявки на пост <b>Лидера ОПГ</b>.\n\n"
         "🔍 <b>Автопроверка:</b>\n"
-        "  • 📝 Био: 5+ предложений и 200+ символов\n"
-        "  • 🎂 Реальный возраст: 14+\n"
-        "  • ⏰ Онлайн: 3+ часов\n"
-        "  • 📋 Наличие всех пунктов\n"
+        f"  • 📝 Био: {MIN_BIO_SENT}+ предложений и {MIN_BIO_LEN}+ символов\n"
+        f"  • 🎂 Возраст: {MIN_AGE}+ (из пункта «Ваше реальное имя и возраст»)\n"
+        f"  • ⏰ Онлайн: {MIN_ONLINE}+ часов\n"
+        "  • 📋 Наличие всех обязательных пунктов\n"
         "  • 🔁 Дубликаты заявок\n\n"
         "📥 <b>Как пользоваться:</b>\n"
         "Нажми «📝 Проверить заявку» и скинь текст заявки из Discord.\n\n"
         f"{divider()}\n"
-        "💡 Выбери действие в меню ниже 👇"
+        "💡 Выбери действие в меню 👇"
     )
     await message.answer(text, parse_mode="HTML", reply_markup=main_kb())
 
 
-# ═══════════════════════════════════════════
-#             КНОПКИ МЕНЮ
-# ═══════════════════════════════════════════
+# ═══════════════ КНОПКИ МЕНЮ ═══════════════
 @dp.message(F.text == "📝 Проверить заявку")
-async def ask_application(message: types.Message, state: FSMContext):
-    await state.set_state(Check.waiting_application)
+async def ask_app(message: types.Message, state: FSMContext):
+    await state.set_state(Check.waiting)
     await message.answer(
         "📥 <b>Кидай текст заявки</b> одним сообщением.\n\n"
-        "💡 Просто скопируй всю заявку из Discord и отправь сюда.",
+        "💡 Скопируй всю заявку из Discord и отправь сюда.\n"
+        "Я проверю её по всем критериям и вынесу вердикт.",
         parse_mode="HTML",
         reply_markup=cancel_kb()
     )
 
 
 @dp.message(F.text == "📊 Статистика")
-async def stats_button(message: types.Message):
+async def stat_btn(message: types.Message):
     s = get_stats()
-    text = (
+    await message.answer(
         "╔════════════════════════════╗\n"
         "     📊 <b>СТАТИСТИКА ЗАЯВОК</b>\n"
         "╚════════════════════════════╝\n\n"
         f"  ├ Всего: <b>{s['total']}</b>\n"
         f"  ├ Принято: <b>{s['accepted']}</b>\n"
         f"  ├ Отказов: <b>{s['rejected']}</b>\n"
-        f"  └ Сегодня: <b>{s['today']}</b>"
+        f"  └ Сегодня: <b>{s['today']}</b>",
+        parse_mode="HTML",
+        reply_markup=back_menu_kb()
     )
-    await message.answer(text, parse_mode="HTML", reply_markup=back_menu_kb())
 
 
 @dp.message(F.text == "🏆 Топ")
-async def top_button(message: types.Message):
+async def top_btn(message: types.Message):
     rows = get_top(10)
     if not rows:
         await message.answer("🏆 Пока нет принятых заявок.", reply_markup=back_menu_kb())
         return
-    text = (
-        "╔════════════════════════════╗\n"
-        "     🏆 <b>ТОП ПРИНЯТЫХ ЗАЯВОК</b>\n"
-        "╚════════════════════════════╝\n\n"
-    )
+    text = "╔════════════════════════════╗\n     🏆 <b>ТОП-10 ПРИНЯТЫХ</b>\n╚════════════════════════════╝\n\n"
     for i, (nick, disc, dt) in enumerate(rows, 1):
         text += f"{i}. <b>{esc(nick)}</b> — {esc(dt)}\n"
     await message.answer(text, parse_mode="HTML", reply_markup=back_menu_kb())
 
 
 @dp.message(F.text == "📖 Инструкция")
-async def instruction(message: types.Message):
+async def instr(message: types.Message):
     text = (
-        "📖 <b>КАК ПОЛЬЗОВАТЬСЯ</b>\n\n"
+        "📖 <b>КАК ПОЛЬЗОВАТЬСЯ БОТОМ</b>\n\n"
         f"{divider()}\n"
-        "1️⃣ Нажми <b>«📝 Проверить заявку»</b>.\n"
-        "2️⃣ Скопируй заявку из Discord.\n"
-        "3️⃣ Отправь её боту одним сообщением.\n"
-        "4️⃣ Получи вердикт: <b>ПРИНЯТА</b> или <b>ОТКАЗ</b>.\n\n"
+        "1️⃣ Нажми <b>«📝 Проверить заявку»</b>\n"
+        "2️⃣ Скопируй заявку из Discord\n"
+        "3️⃣ Отправь боту одним сообщением\n"
+        "4️⃣ Получи вердикт: <b>ПРИНЯТА</b> или <b>ОТКАЗ</b>\n\n"
         f"{divider()}\n"
         "<b>Что проверяется автоматически:</b>\n"
         "  • Наличие всех обязательных пунктов\n"
-        "  • Био: количество предложений и длина\n"
-        "  • Возраст из пункта «Реальный возраст»\n"
-        "  • Онлайн из пункта «Онлайн»\n"
+        "  • Био: 5+ предложений и 200+ символов\n"
+        "  • Возраст 14+ (из пункта «Ваше реальное имя и возраст»)\n"
+        "  • Онлайн 3+ часов\n"
         "  • Дубликаты заявок\n\n"
         f"{divider()}\n"
-        "<b>Что проверяется вручную админом:</b>\n"
+        "<b>Что проверяет админ вручную:</b>\n"
         "  • Скриншот ↔ ник\n"
         "  • Уровень 10+\n"
         "  • Наказания (BAN/WARN)\n"
@@ -455,14 +460,12 @@ async def instruction(message: types.Message):
 @dp.message(F.text == "❌ Отмена")
 async def cancel(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Отменено. Возвращаю в меню.", reply_markup=main_kb())
+    await message.answer("❌ Отменено.", reply_markup=main_kb())
 
 
-# ═══════════════════════════════════════════
-#              ПРОВЕРКА
-# ═══════════════════════════════════════════
-@dp.message(Check.waiting_application)
-async def check_application(message: types.Message, state: FSMContext):
+# ═══════════════ ПРОВЕРКА ЗАЯВКИ ═══════════════
+@dp.message(Check.waiting)
+async def check_app(message: types.Message, state: FSMContext):
     try:
         text = message.text or message.caption or ""
         if len(text.strip()) < 30:
@@ -473,22 +476,20 @@ async def check_application(message: types.Message, state: FSMContext):
         duplicate = find_duplicate(data["nickname"], data["discord"])
         emoji, reasons, status = make_verdict(data, duplicate)
 
-        result = build_result_card(data, reasons, status, emoji)
-        await message.answer(result, parse_mode="HTML", reply_markup=main_kb())
+        card = build_card(data, reasons, status, emoji)
+        await message.answer(card, parse_mode="HTML", reply_markup=main_kb())
 
         save_application(message.from_user, data, status, reasons)
 
-        # Отправка в админ-группу
         if ADMIN_CHAT_ID:
-            safe_text = esc(text[:3000])
-            user = message.from_user
+            safe = esc(text[:3500])
+            u = message.from_user
             admin_text = (
-                f"{build_result_card(data, reasons, status, emoji)}\n\n"
+                f"{card}\n\n"
                 f"{divider()}\n"
-                f"👤 От: @{esc(user.username) or 'без_юз'} "
-                f"(<code>{user.id}</code>)\n\n"
-                f"📄 <b>Оригинал:</b>\n"
-                f"<blockquote>{safe_text}</blockquote>"
+                f"👤 От: @{esc(u.username) or 'без_юз'} (<code>{u.id}</code>)\n\n"
+                f"📄 <b>Оригинал заявки:</b>\n"
+                f"<blockquote>{safe}</blockquote>"
             )
             try:
                 await bot.send_message(
@@ -504,16 +505,14 @@ async def check_application(message: types.Message, state: FSMContext):
 
     except Exception as e:
         err = traceback.format_exc()
-        logging.error(f"check_application error:\n{err}")
+        logging.error(f"check_app error:\n{err}")
         await message.answer(
             f"⚠️ <b>Ошибка:</b>\n<code>{esc(str(e))[:300]}</code>",
             parse_mode="HTML"
         )
 
 
-# ═══════════════════════════════════════════
-#              КНОПКИ АДМИНА
-# ═══════════════════════════════════════════
+# ═══════════════ ИНЛАЙН-КНОПКИ ═══════════════
 @dp.callback_query(F.data == "accept")
 async def cb_accept(call: CallbackQuery):
     await call.answer("✅ Принято")
@@ -522,8 +521,7 @@ async def cb_accept(call: CallbackQuery):
     except Exception:
         pass
     await call.message.reply(
-        f"✅ <b>Заявка одобрена</b>\n"
-        f"Админ: @{esc(call.from_user.username) or call.from_user.id}",
+        f"✅ <b>Заявка одобрена</b>\nАдмин: @{esc(call.from_user.username) or call.from_user.id}",
         parse_mode="HTML"
     )
 
@@ -536,8 +534,7 @@ async def cb_reject(call: CallbackQuery):
     except Exception:
         pass
     await call.message.reply(
-        f"❌ <b>Заявка отклонена</b>\n"
-        f"Админ: @{esc(call.from_user.username) or call.from_user.id}",
+        f"❌ <b>Заявка отклонена</b>\nАдмин: @{esc(call.from_user.username) or call.from_user.id}",
         parse_mode="HTML"
     )
 
@@ -546,14 +543,14 @@ async def cb_reject(call: CallbackQuery):
 async def cb_stats(call: CallbackQuery):
     await call.answer()
     s = get_stats()
-    text = (
-        "📊 <b>Статистика</b>\n\n"
+    await call.message.reply(
+        f"📊 <b>Статистика</b>\n\n"
         f"  ├ Всего: <b>{s['total']}</b>\n"
         f"  ├ Принято: <b>{s['accepted']}</b>\n"
         f"  ├ Отказов: <b>{s['rejected']}</b>\n"
-        f"  └ Сегодня: <b>{s['today']}</b>"
+        f"  └ Сегодня: <b>{s['today']}</b>",
+        parse_mode="HTML"
     )
-    await call.message.reply(text, parse_mode="HTML")
 
 
 @dp.callback_query(F.data == "top")
@@ -563,7 +560,7 @@ async def cb_top(call: CallbackQuery):
     if not rows:
         await call.message.reply("🏆 Пока нет принятых заявок.")
         return
-    text = "🏆 <b>Топ принятых:</b>\n\n"
+    text = "🏆 <b>Топ-10:</b>\n\n"
     for i, (nick, disc, dt) in enumerate(rows, 1):
         text += f"{i}. <b>{esc(nick)}</b> — {esc(dt)}\n"
     await call.message.reply(text, parse_mode="HTML")
@@ -579,14 +576,12 @@ async def cb_menu(call: CallbackQuery):
     await call.message.answer("🏠 В меню.", reply_markup=main_kb())
 
 
-# ═══════════════════════════════════════════
-#             КОМАНДЫ АДМИНА
-# ═══════════════════════════════════════════
+# ═══════════════ КОМАНДЫ ═══════════════
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     s = get_stats()
     await message.answer(
-        "📊 <b>Статистика</b>\n\n"
+        f"📊 <b>Статистика</b>\n\n"
         f"  ├ Всего: <b>{s['total']}</b>\n"
         f"  ├ Принято: <b>{s['accepted']}</b>\n"
         f"  ├ Отказов: <b>{s['rejected']}</b>\n"
@@ -601,7 +596,7 @@ async def cmd_top(message: types.Message):
     if not rows:
         await message.answer("🏆 Пока нет принятых заявок.")
         return
-    text = "🏆 <b>Топ-10 принятых:</b>\n\n"
+    text = "🏆 <b>Топ-10:</b>\n\n"
     for i, (nick, disc, dt) in enumerate(rows, 1):
         text += f"{i}. <b>{esc(nick)}</b> — {esc(dt)}\n"
     await message.answer(text, parse_mode="HTML")
@@ -611,21 +606,19 @@ async def cmd_top(message: types.Message):
 async def cmd_export(message: types.Message):
     try:
         data = export_csv()
-        file = BufferedInputFile(data, filename=f"applications_{datetime.now():%Y%m%d_%H%M}.csv")
-        await message.answer_document(file, caption="📁 Экспорт заявок")
+        f = BufferedInputFile(data, filename=f"applications_{datetime.now():%Y%m%d_%H%M}.csv")
+        await message.answer_document(f, caption="📁 Экспорт заявок")
     except Exception as e:
-        await message.answer(f"⚠️ Ошибка экспорта: {esc(e)}")
+        await message.answer(f"⚠️ Ошибка: {esc(e)}")
 
 
 @dp.message(Command("menu"))
 async def cmd_menu(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("🏠 Главное меню:", reply_markup=main_kb())
+    await message.answer("🏠 Меню:", reply_markup=main_kb())
 
 
-# ═══════════════════════════════════════════
-#              FALLBACK
-# ═══════════════════════════════════════════
+# ═══════════════ FALLBACK ═══════════════
 @dp.message()
 async def fallback(message: types.Message, state: FSMContext):
     await message.answer(
@@ -634,9 +627,7 @@ async def fallback(message: types.Message, state: FSMContext):
     )
 
 
-# ═══════════════════════════════════════════
-#                ЗАПУСК
-# ═══════════════════════════════════════════
+# ═══════════════ ЗАПУСК ═══════════════
 async def main():
     logging.info("Bot started")
     await dp.start_polling(bot)
