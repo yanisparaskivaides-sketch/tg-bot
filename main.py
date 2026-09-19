@@ -40,16 +40,19 @@ MIN_AGE = 14
 MIN_ONLINE = 3
 MIN_BIO_SENT = 5
 MIN_BIO_LEN = 200
-MIN_GRAMMAR = 50  # минимальная оценка грамотности (0-100)
+MIN_GRAMMAR = 50
 
 
 # ═══════════════ УТИЛИТЫ ═══════════════
 def esc(s) -> str:
-    if s is None: return ""
+    if s is None:
+        return ""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 
 def now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
+
 
 def divider() -> str:
     return "━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -57,24 +60,16 @@ def divider() -> str:
 
 # ═══════════════ ПОДСЧЁТ ПРЕДЛОЖЕНИЙ ═══════════════
 def count_sentences(text: str) -> int:
-    """
-    Умный подсчёт предложений:
-    - делит по . ! ? … и переносам строк
-    - отбрасывает обрывки короче 3 символов
-    - не считает "..." за 3 предложения
-    """
+    """Считает предложения: делит по . ! ? … и переносам, отбрасывает короткие обрывки."""
     if not text:
         return 0
-    # заменяем многоточия на один маркер
     t = text.replace("...", "…").replace("..", ".")
-    # разделяем по знакам и переносам
     parts = re.split(r"[.!?…\n]+", t)
-    # фильтруем пустые и слишком короткие
     sentences = [p.strip() for p in parts if len(p.strip()) >= 3]
     return len(sentences)
 
 
-# ═══════════════ ПРОВЕРКА ГРАМОТНОСТИ (без AI) ═══════════════
+# ═══════════════ ПРОВЕРКА ГРАМОТНОСТИ ═══════════════
 COMMON_WORDS = {
     "и","в","во","не","что","он","на","я","с","со","как","а","то","все","она","так","его",
     "но","да","ты","к","у","же","вы","за","бы","по","только","ее","мне","было","вот","от",
@@ -93,18 +88,15 @@ COMMON_WORDS = {
     "является","имеет","может","будет","имею","хочу","могу","буду","стал","стать","играю",
 }
 
+
 def check_grammar(text: str) -> dict:
-    """
-    Возвращает {'score': 0-100, 'issues': [...]}
-    Проверяет: капс, повторы, отсутствие точек, типичные ошибки, длину слов.
-    """
+    """Возвращает {'score': 0-100, 'issues': [...]}"""
     if not text or len(text.strip()) < 20:
         return {"score": 0, "issues": ["Текст слишком короткий для проверки"]}
 
     issues = []
     score = 100
 
-    # 1. Капс
     letters = [c for c in text if c.isalpha()]
     if letters:
         upper_ratio = sum(1 for c in letters if c.isupper()) / len(letters)
@@ -112,14 +104,12 @@ def check_grammar(text: str) -> dict:
             issues.append("Много заглавных букв (капс)")
             score -= 25
 
-    # 2. Нет точек в конце предложений
     sentences_raw = re.split(r"[.!?…\n]+", text)
     long_sentences = [s.strip() for s in sentences_raw if len(s.strip()) > 100]
     if long_sentences:
         issues.append(f"Слишком длинные предложения без точек ({len(long_sentences)} шт.)")
         score -= 10 * min(len(long_sentences), 3)
 
-    # 3. Повторы слов
     words = re.findall(r"[а-яёa-z]{3,}", text.lower())
     if words:
         counter = Counter(words)
@@ -129,25 +119,21 @@ def check_grammar(text: str) -> dict:
             issues.append(f"Повторяющиеся слова: {top}")
             score -= 5 * len(repeats)
 
-    # 4. Типичные ошибки
     typo_patterns = [
         (r"\bжы\b|\bшы\b", "«жы/шы» — пиши «жи/ши»"),
         (r"\bчя\b|\bщя\b", "«чя/щя» — пиши «ча/ща»"),
         (r"\bне\s+[а-яё]+ться\b", "Возможно «-ться/-тся» написано неверно"),
         (r"\bчто\s*бы\b", "«что бы» — проверь, не «чтобы» ли"),
-        (r"\bне\s+буду\b.*\bне\s+буду\b", "Двойное отрицание"),
     ]
     for pat, msg in typo_patterns:
         if re.search(pat, text.lower()):
             issues.append(msg)
             score -= 5
 
-    # 5. Опечатки: слова с 3+ одинаковыми буквами подряд
     if re.search(r"([а-яёa-z])\1{2,}", text.lower()):
         issues.append("Опечатки/растягивание букв (ааа, еее)")
         score -= 10
 
-    # 6. Нет заглавной в начале предложения
     for s in sentences_raw:
         s = s.strip()
         if len(s) > 10 and s[0].islower():
@@ -155,13 +141,11 @@ def check_grammar(text: str) -> dict:
             score -= 5
             break
 
-    # 7. Слишком мало знаков препинания
     punct = len(re.findall(r"[,.!?;:…]", text))
     if len(text) > 200 and punct < 3:
         issues.append("Мало знаков препинания")
         score -= 15
 
-    # 8. Проверка на осмысленность: доля не-словарных слов
     if words:
         unknown = [w for w in words if w not in COMMON_WORDS and len(w) > 4]
         unknown_ratio = len(unknown) / len(words)
@@ -172,7 +156,6 @@ def check_grammar(text: str) -> dict:
             issues.append("Много нестандартных слов")
             score -= 5
 
-    # 9. Нет знаков вообще
     if not re.search(r"[.!?…]", text):
         issues.append("Нет знаков завершения предложений (. ! ?)")
         score -= 20
@@ -183,17 +166,18 @@ def check_grammar(text: str) -> dict:
     return {"score": score, "issues": issues}
 
 
-# ═══════════════ AI (ОПЦИОНАЛЬНО) ═══════════════
+# ═══════════════ AI ═══════════════
 AI_PROMPT = """Ты — строгий проверяющий заявок на пост Лидера ОПГ в GTA-ролевом проекте.
 Оцени заявку по критериям: грамотность, адекватность, осмысленность био, РП-соответствие.
 Верни СТРОГО JSON:
-{"score": 0-100, "grammar_ok": true/false, "adequate": true/false,
- "bio_meaningful": true/false, "rp_match": true/false, "comment": "до 200 символов на русском"}
+{{"score": 0-100, "grammar_ok": true/false, "adequate": true/false,
+ "bio_meaningful": true/false, "rp_match": true/false, "comment": "до 200 символов на русском"}}
 
 Текст заявки:
 ---
 {application}
 ---"""
+
 
 async def ai_check(application_text: str):
     if not AI_API_KEY:
@@ -226,7 +210,8 @@ async def ai_check(application_text: str):
 # ═══════════════ БАЗА ═══════════════
 def init_db():
     try:
-        conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
         cur.execute("""
             CREATE TABLE IF NOT EXISTS applications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -238,23 +223,33 @@ def init_db():
                 ai_score INTEGER, ai_comment TEXT,
                 verdict TEXT, reason TEXT, applied_at TEXT
             )""")
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
         logging.info("DB ready")
-    except Exception as e: logging.error(f"DB: {e}")
+    except Exception as e:
+        logging.error(f"DB: {e}")
+
 
 def find_duplicate(nickname, discord):
     try:
-        if not nickname and not discord: return None
-        conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
+        if not nickname and not discord:
+            return None
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
         cur.execute("SELECT nickname, discord, applied_at, verdict FROM applications "
                     "WHERE LOWER(nickname)=LOWER(?) OR LOWER(discord)=LOWER(?) "
                     "ORDER BY id DESC LIMIT 1", (nickname or "", discord or ""))
-        row = cur.fetchone(); conn.close(); return row
-    except: return None
+        row = cur.fetchone()
+        conn.close()
+        return row
+    except:
+        return None
+
 
 def save_application(user, data, verdict, reason, grammar_score, grammar_issues, ai_score, ai_comment):
     try:
-        conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
         cur.execute(
             "INSERT INTO applications (telegram_id, username, nickname, discord, age, online, "
             "bio_sentences, bio_length, grammar_score, grammar_issues, ai_score, ai_comment, "
@@ -265,41 +260,60 @@ def save_application(user, data, verdict, reason, grammar_score, grammar_issues,
              grammar_score, "; ".join(grammar_issues)[:300],
              ai_score or 0, ai_comment or "",
              verdict, "; ".join(reason)[:500], now_str()))
-        conn.commit(); conn.close()
-    except Exception as e: logging.error(f"save: {e}")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"save: {e}")
+
 
 def get_stats():
     try:
-        conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM applications"); t = cur.fetchone()[0] or 0
-        cur.execute("SELECT COUNT(*) FROM applications WHERE verdict='ОТКАЗ'"); r = cur.fetchone()[0] or 0
-        cur.execute("SELECT COUNT(*) FROM applications WHERE verdict LIKE 'ПОДХОДИТ%'"); a = cur.fetchone()[0] or 0
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM applications")
+        t = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM applications WHERE verdict='ОТКАЗ'")
+        r = cur.fetchone()[0] or 0
+        cur.execute("SELECT COUNT(*) FROM applications WHERE verdict LIKE 'ПОДХОДИТ%'")
+        a = cur.fetchone()[0] or 0
         today = datetime.now().strftime("%Y-%m-%d")
         cur.execute("SELECT COUNT(*) FROM applications WHERE applied_at LIKE ?", (f"{today}%",))
         td = cur.fetchone()[0] or 0
         conn.close()
         return {"total": t, "rejected": r, "accepted": a, "today": td}
-    except: return {"total":0,"rejected":0,"accepted":0,"today":0}
+    except:
+        return {"total": 0, "rejected": 0, "accepted": 0, "today": 0}
+
 
 def get_top(limit=10):
     try:
-        conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
         cur.execute("SELECT nickname, discord, applied_at FROM applications "
                     "WHERE verdict LIKE 'ПОДХОДИТ%' ORDER BY id DESC LIMIT ?", (limit,))
-        rows = cur.fetchall(); conn.close(); return rows
-    except: return []
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    except:
+        return []
+
 
 def export_csv():
-    conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
     cur.execute("""SELECT id, telegram_id, username, nickname, discord, age, online,
                           bio_sentences, bio_length, grammar_score, ai_score, verdict, applied_at
                    FROM applications ORDER BY id DESC""")
-    rows = cur.fetchall(); conn.close()
-    buf = io.StringIO(); w = csv.writer(buf, delimiter=";")
-    w.writerow(["ID","TG","Username","Nick","Discord","Age","Online","Bio_sent",
-                "Bio_len","Grammar","AI","Verdict","Applied"])
-    for r in rows: w.writerow(r)
+    rows = cur.fetchall()
+    conn.close()
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["ID", "TG", "Username", "Nick", "Discord", "Age", "Online", "Bio_sent",
+                "Bio_len", "Grammar", "AI", "Verdict", "Applied"])
+    for r in rows:
+        w.writerow(r)
     return buf.getvalue().encode("utf-8")
+
 
 init_db()
 
@@ -318,8 +332,10 @@ def main_kb():
         [InlineKeyboardButton(text="📖 Инструкция", callback_data="help")],
     ])
 
+
 def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Отмена")]], resize_keyboard=True)
+
 
 def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -328,6 +344,7 @@ def admin_kb():
         [InlineKeyboardButton(text="📊 Стата", callback_data="stats"),
          InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
     ])
+
 
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 В меню", callback_data="menu")]])
@@ -351,28 +368,37 @@ def parse_application(text: str) -> dict:
         if ("реальн" in low and "возраст" in low) or re.search(r"имя\s*и\s*возраст", low):
             nums = re.findall(r"\b(\d{1,2})\b", line)
             for n in nums:
-                if 10 <= int(n) <= 99: age = int(n); break
-            if age: break
+                if 10 <= int(n) <= 99:
+                    age = int(n)
+                    break
+            if age:
+                break
     if age is None:
         for line in lines:
             if re.match(r"\s*(?:ваш[а-я]*\s*)?(?:реальн[а-я]*\s*)?возраст\s*[:\-]", line.lower()):
                 nums = re.findall(r"\b(\d{1,2})\b", line)
                 for n in nums:
-                    if 10 <= int(n) <= 99: age = int(n); break
-                if age: break
+                    if 10 <= int(n) <= 99:
+                        age = int(n)
+                        break
+                if age:
+                    break
     data["age"] = age
 
     online = None
     for line in lines:
         if re.search(r"онлайн", line, re.IGNORECASE):
             nums = re.findall(r"\b(\d{1,2})\b", line)
-            if nums: online = max(int(n) for n in nums); break
+            if nums:
+                online = max(int(n) for n in nums)
+                break
     data["online"] = online
 
     bio = ""
     m = re.search(r"биограф[^\n]*[:\n]+(.*?)(?=\n\s*\n|\n[А-ЯЁA-Z][^\n]{0,60}:|\Z)",
                   text, re.DOTALL | re.IGNORECASE)
-    if m: bio = m.group(1).strip()
+    if m:
+        bio = m.group(1).strip()
     data["bio"] = bio
     data["bio_sentences"] = count_sentences(bio)
     data["bio_length"] = len(bio)
@@ -401,7 +427,6 @@ def make_verdict(data, duplicate, grammar, ai_score):
                        f"(Discord: {esc(duplicate[1])}), {esc(duplicate[2])}, статус: {esc(duplicate[3])}")
         hard_fail = True
 
-    # Био — предложения
     if data["bio_sentences"] < MIN_BIO_SENT:
         reasons.append(f"📝 <b>Мало предложений в био</b> — <b>{data['bio_sentences']}</b>, нужно {MIN_BIO_SENT}+")
         hard_fail = True
@@ -427,12 +452,10 @@ def make_verdict(data, duplicate, grammar, ai_score):
         reasons.append("📋 <b>Отсутствуют пункты:</b> " + ", ".join(data["missing"]))
         hard_fail = True
 
-    # Грамотность (свой алгоритм)
     if grammar["score"] < MIN_GRAMMAR:
         reasons.append(f"📚 <b>Грамотность: {grammar['score']}/100</b> — низкая")
         hard_fail = True
 
-    # AI
     if ai_score is not None and ai_score < 50:
         reasons.append(f"🧠 <b>AI: {ai_score}/100</b> — низкая оценка")
         hard_fail = True
@@ -468,9 +491,8 @@ def build_card(data, reasons, status, grammar, ai_score, ai_comment):
     else:
         rb = "✅ <b>ПРОШЛО:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
 
-    # замечания по грамотности
     g_block = ""
-    if grammar["issues"]:
+    if grammar["issues"] and grammar["issues"] != ["Грамматика в порядке ✅"]:
         g_list = "\n".join(f"  • {esc(i)}" for i in grammar["issues"][:5])
         g_block = f"\n📚 <b>ЗАМЕЧАНИЯ ПО ГРАМОТНОСТИ:</b>\n{g_list}\n"
 
@@ -506,9 +528,12 @@ async def start(m: types.Message, state: FSMContext):
 
 @dp.callback_query(F.data == "menu")
 async def cb_menu(c: CallbackQuery, state: FSMContext):
-    await state.clear(); await c.answer()
-    try: await c.message.edit_reply_markup(reply_markup=None)
-    except: pass
+    await state.clear()
+    await c.answer()
+    try:
+        await c.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass
     await c.message.answer("🏠 Меню:", reply_markup=main_kb())
 
 
@@ -516,7 +541,8 @@ async def cb_menu(c: CallbackQuery, state: FSMContext):
 async def cb_check(c: CallbackQuery, state: FSMContext):
     await c.answer()
     await state.set_state(Check.waiting)
-    await c.message.answer("📥 <b>Кидай текст заявки</b> одним сообщением.", parse_mode="HTML", reply_markup=cancel_kb())
+    await c.message.answer("📥 <b>Кидай текст заявки</b> одним сообщением.",
+                           parse_mode="HTML", reply_markup=cancel_kb())
 
 
 @dp.callback_query(F.data == "stats")
@@ -534,9 +560,11 @@ async def cb_top(c: CallbackQuery):
     await c.answer()
     rows = get_top(10)
     if not rows:
-        await c.message.answer("🏆 Пусто.", reply_markup=back_kb()); return
+        await c.message.answer("🏆 Пусто.", reply_markup=back_kb())
+        return
     text = "🏆 <b>Топ-10:</b>\n\n"
-    for i, (n, d, dt) in enumerate(rows, 1): text += f"{i}. <b>{esc(n)}</b> — {esc(dt)}\n"
+    for i, (n, d, dt) in enumerate(rows, 1):
+        text += f"{i}. <b>{esc(n)}</b> — {esc(dt)}\n"
     await c.message.answer(text, parse_mode="HTML", reply_markup=back_kb())
 
 
@@ -558,7 +586,8 @@ async def check_app(m: types.Message, state: FSMContext):
     try:
         text = m.text or m.caption or ""
         if len(text.strip()) < 30:
-            await m.answer("❌ Слишком коротко."); return
+            await m.answer("❌ Слишком коротко.")
+            return
 
         wait = await m.answer("⏳ <b>Проверяю...</b>", parse_mode="HTML")
 
@@ -570,21 +599,26 @@ async def check_app(m: types.Message, state: FSMContext):
         emoji, reasons, status = make_verdict(data, duplicate, grammar, ai_score)
         card = build_card(data, reasons, status, grammar, ai_score, ai_comment)
 
-        try: await wait.delete()
-        except: pass
+        try:
+            await wait.delete()
+        except:
+            pass
         await m.answer(card, parse_mode="HTML", reply_markup=main_kb())
 
-        save_application(m.from_user, data, status, reasons, grammar["score"], grammar["issues"], ai_score, ai_comment)
+        save_application(m.from_user, data, status, reasons,
+                         grammar["score"], grammar["issues"], ai_score, ai_comment)
 
         if ADMIN_CHAT_ID:
-            safe = esc(text[:3500]); u = m.from_user
+            safe = esc(text[:3500])
+            u = m.from_user
             admin_text = (f"{card}\n\n{divider()}\n"
                           f"👤 @{esc(u.username) or 'без_юз'} (<code>{u.id}</code>)\n\n"
                           f"📄 <b>Оригинал:</b>\n<blockquote>{safe}</blockquote>")
             try:
                 await bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text,
                                        parse_mode="HTML", reply_markup=admin_kb())
-            except Exception as e: logging.error(f"admin: {e}")
+            except Exception as e:
+                logging.error(f"admin: {e}")
 
         await state.clear()
     except Exception as e:
@@ -595,18 +629,82 @@ async def check_app(m: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "accept")
 async def cb_accept(c: CallbackQuery):
     await c.answer("✅")
-    try: await c.message.edit_reply_markup(reply_markup=None)
-    except: pass
-    await c.message.reply(f"✅ <b>Принято</b> — @{esc(c.from_user.username) or c.from_user.id}", parse_mode="HTML")
+    try:
+        await c.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass
+    await c.message.reply(
+        f"✅ <b>Принято</b> — @{esc(c.from_user.username) or c.from_user.id}",
+        parse_mode="HTML"
+    )
+
 
 @dp.callback_query(F.data == "reject")
 async def cb_reject(c: CallbackQuery):
     await c.answer("❌")
-    try: await c.message.edit_reply_markup(reply_markup=None)
-    except: pass
-    await c.message.reply(f"❌ <b>Отклонено</b> — @{esc(c.from_user.username) or c.from_user.id}", parse_mode="HTML")
+    try:
+        await c.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass
+    await c.message.reply(
+        f"❌ <b>Отклонено</b> — @{esc(c.from_user.username) or c.from_user.id}",
+        parse_mode="HTML"
+    )
+
 
 @dp.message(F.text == "❌ Отмена")
 async def cancel(m: types.Message, state: FSMContext):
     await state.clear()
-    await m.answer("❌", reply_mark
+    await m.answer("❌ Отменено.", reply_markup=main_kb())
+
+
+@dp.message(Command("stats"))
+async def cmd_stats(m: types.Message):
+    s = get_stats()
+    await m.answer(
+        f"📊 <b>Статистика</b>\n\n  ├ Всего: <b>{s['total']}</b>\n"
+        f"  ├ Принято: <b>{s['accepted']}</b>\n  ├ Отказов: <b>{s['rejected']}</b>\n"
+        f"  └ Сегодня: <b>{s['today']}</b>", parse_mode="HTML")
+
+
+@dp.message(Command("top"))
+async def cmd_top(m: types.Message):
+    rows = get_top(10)
+    if not rows:
+        await m.answer("🏆 Пусто.")
+        return
+    text = "🏆 <b>Топ-10:</b>\n\n"
+    for i, (n, d, dt) in enumerate(rows, 1):
+        text += f"{i}. <b>{esc(n)}</b> — {esc(dt)}\n"
+    await m.answer(text, parse_mode="HTML")
+
+
+@dp.message(Command("export"))
+async def cmd_export(m: types.Message):
+    try:
+        data = export_csv()
+        f = BufferedInputFile(data, filename=f"applications_{datetime.now():%Y%m%d_%H%M}.csv")
+        await m.answer_document(f, caption="📁 Экспорт")
+    except Exception as e:
+        await m.answer(f"⚠️ {esc(e)}")
+
+
+@dp.message(Command("menu"))
+async def cmd_menu(m: types.Message, state: FSMContext):
+    await state.clear()
+    await m.answer("🏠 Меню:", reply_markup=main_kb())
+
+
+@dp.message()
+async def fallback(m: types.Message, state: FSMContext):
+    await m.answer("💡 /menu — открыть меню.", reply_markup=main_kb())
+
+
+# ═══════════════ ЗАПУСК ═══════════════
+async def main():
+    logging.info("Bot started")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
