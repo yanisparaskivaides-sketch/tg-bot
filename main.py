@@ -140,7 +140,7 @@ def find_typos(text: str) -> list:
     return issues[:15]
 
 
-# ═══════════════ ГРАМОТНОСТЬ (свой алгоритм) ═══════════════
+# ═══════════════ ГРАМОТНОСТЬ ═══════════════
 def check_grammar(text: str) -> dict:
     if not text or len(text.strip()) < 20:
         return {"score": 0, "issues": ["Текст слишком короткий"], "typos": []}
@@ -200,15 +200,15 @@ AI_SYSTEM_PROMPT = """Ты — опытный куратор GTA-ролевог�
 
 ТВОЯ ЗАДАЧА:
 Оценить ТОЛЬКО текст заявки по 6 критериям (0-100 каждый):
-- grammar — грамотность (орфография, пунктуация, капс, сленг)
-- adequacy — адекватность тона (нет агрессии, оскорблений, бессмыслицы)
-- bio_meaning — осмысленность биографии (связность, логика, РП)
-- rp_match — соответствие РП-миру GTA (реалистично ли для лидера ОПГ)
-- completeness — заполненность заявки (все ли пункты)
+- grammar — грамотность
+- adequacy — адекватность тона
+- bio_meaning — осмысленность биографии
+- rp_match — соответствие РП-миру GTA
+- completeness — заполненность заявки
 - overall — общая оценка
 
 Также:
-- Перечисли КОНКРЕТНЫЕ ошибки в тексте (5-15 штук): опечатки, неграмотные слова, повторы, капс, сленг. Указывай слово, как правильно, и причину.
+- Перечисли КОНКРЕТНЫЕ ошибки в тексте (5-15 штук): опечатки, неграмотные слова, повторы, капс, сленг.
 - Дай короткий вердикт (1-2 предложения).
 
 ВЕРНИ СТРОГО ВАЛИДНЫЙ JSON без комментариев и markdown:
@@ -226,11 +226,11 @@ AI_SYSTEM_PROMPT = """Ты — опытный куратор GTA-ролевог�
 }
 
 ВАЖНО:
-- Оценивай строго. Если био — набор слов или отписка, ставь bio_meaning ниже 40.
-- Если в тексте капс, сленг, куча ошибок — grammar ниже 50.
+- Оценивай строго.
+- Если био — набор слов или отписка, ставь bio_meaning ниже 40.
+- Если капс, сленг, куча ошибок — grammar ниже 50.
 - Если заявка неполная — completeness ниже 50.
-- Общая оценка overall — это средневзвешенное, но если есть грубые косяки (нет возраста, нет онлайна, био <5 предложений) — overall ниже 40.
-- Текст заявки может быть на русском. Отвечай тоже на русском, но JSON-ключи оставь английскими."""
+- Если грубые косяки (нет возраста, нет онлайна, био <5 предложений) — overall ниже 40."""
 
 
 async def ai_check(application_text: str):
@@ -377,6 +377,7 @@ init_db()
 # ═══════════════ СОСТОЯНИЯ ═══════════════
 class Check(StatesGroup):
     waiting = State()
+    debug = State()
 
 
 # ═══════════════ КЛАВИАТУРЫ ═══════════════
@@ -578,11 +579,20 @@ def build_card(data, reasons, status, grammar, ai_json):
             f"\n💬 <b>Вердикт AI:</b> <i>{verdict}</i>\n"
         )
 
+        # СЫРОЙ ОТВЕТ НЕЙРОНКИ
+        raw_json = json.dumps(ai_json, ensure_ascii=False, indent=2)
+        raw_safe = esc(raw_json)[:3500]
+        ai_block += (
+            f"\n{divider()}\n"
+            f"📡 <b>RAW AI RESPONSE:</b>\n"
+            f"<pre>{raw_safe}</pre>\n"
+        )
+
     footer = f"\n{divider()}\n🤖 <i>Решение вынесено автоматически.</i>"
     return header + info + rb + typo_block + ai_block + footer
 
 
-# ═══════════════ ХЕНДЛЕРЫ ═══════════════
+# ═══════════════ СТАРТ ═══════════════
 @dp.message(CommandStart())
 async def start(m: types.Message, state: FSMContext):
     await state.clear()
@@ -591,7 +601,7 @@ async def start(m: types.Message, state: FSMContext):
         "╔════════════════════════════╗\n"
         "     🎯 <b>ПРОВЕРКА ЗАЯВОК ОПГ</b> 🎯\n"
         "╚════════════════════════════╝\n\n"
-        "👋 Привет! Я автоматически проверяю заявки.\n\n"
+        "👋 Привет! Я автоматически проверяю заявки через нейронку.\n\n"
         "🔍 <b>Проверяю:</b>\n"
         f"  • 📝 Био: {MIN_BIO_SENT}+ предложений и {MIN_BIO_LEN}+ символов\n"
         f"  • 🎂 Возраст {MIN_AGE}+ (из «Ваше реальное имя и возраст»)\n"
@@ -599,12 +609,15 @@ async def start(m: types.Message, state: FSMContext):
         "  • 📋 Все обязательные пункты\n"
         "  • 🔁 Дубликаты\n"
         f"  • 📚 Грамотность (мин. {MIN_GRAMMAR}/100)\n"
-        "  • ⚠️ Показываю неграмотные слова\n"
-        "  • 🧠 AI-анализ (Groq)\n\n"
-        f"{ai}\n\n{divider()}\n💡 Выбери действие 👇")
+        "  • ⚠️ Неграмотные слова\n"
+        "  • 🧠 AI-анализ (Groq, с полным RAW ответом)\n\n"
+        f"{ai}\n\n"
+        "🐞 <b>/ai_debug</b> — показать только сырой ответ нейронки\n\n"
+        f"{divider()}\n💡 Выбери действие 👇")
     await m.answer(text, parse_mode="HTML", reply_markup=main_kb())
 
 
+# ═══════════════ МЕНЮ ═══════════════
 @dp.callback_query(F.data == "menu")
 async def cb_menu(c: CallbackQuery, state: FSMContext):
     await state.clear()
@@ -654,12 +667,12 @@ async def cb_help(c: CallbackQuery):
             "1️⃣ Нажми «📝 Проверить заявку»\n"
             "2️⃣ Скопируй заявку из Discord\n"
             "3️⃣ Отправь боту одним сообщением\n"
-            "4️⃣ Бот + нейронка вынесут вердикт\n\n"
-            "📚 <b>Проверяется:</b> био, возраст, онлайн, дубликаты, "
-            "грамотность и AI-анализ.")
+            "4️⃣ Получи полный вердикт + RAW ответ нейронки\n\n"
+            "🐞 <b>/ai_debug</b> — режим, где показывается только сырой ответ AI.")
     await c.message.answer(text, parse_mode="HTML", reply_markup=back_kb())
 
 
+# ═══════════════ ОБЫЧНАЯ ПРОВЕРКА ═══════════════
 @dp.message(Check.waiting)
 async def check_app(m: types.Message, state: FSMContext):
     try:
@@ -706,12 +719,65 @@ async def check_app(m: types.Message, state: FSMContext):
         await m.answer(f"⚠️ <code>{esc(str(e))[:300]}</code>", parse_mode="HTML")
 
 
+# ═══════════════ DEBUG-РЕЖИМ ═══════════════
+@dp.message(Command("ai_debug"))
+async def cmd_ai_debug(m: types.Message, state: FSMContext):
+    await state.clear()
+    await state.set_state(Check.debug)
+    await m.answer(
+        "🐞 <b>AI DEBUG MODE</b>\n\n"
+        "Кидай текст заявки — я покажу <b>ТОЛЬКО сырой ответ нейронки</b>, "
+        "без формальных проверок.\n\n"
+        "Для обычной проверки — /menu → «📝 Проверить заявку».",
+        parse_mode="HTML",
+        reply_markup=cancel_kb()
+    )
+
+
+@dp.message(Check.debug)
+async def check_app_debug(m: types.Message, state: FSMContext):
+    try:
+        text = m.text or m.caption or ""
+        if len(text.strip()) < 30:
+            await m.answer("❌ Слишком коротко.")
+            return
+
+        if not AI_API_KEY:
+            await m.answer("⚠️ AI выключен. Нет переменной `AI_API_KEY` в Railway.")
+            await state.clear()
+            return
+
+        wait = await m.answer("⏳ <b>Спрашиваю нейронку...</b>", parse_mode="HTML")
+        ai_json = await ai_check(text)
+        try:
+            await wait.delete()
+        except:
+            pass
+
+        if ai_json is None:
+            await m.answer("❌ Нейронка не ответила. Проверь логи Railway.")
+        else:
+            raw = json.dumps(ai_json, ensure_ascii=False, indent=2)
+            raw_safe = esc(raw)[:3800]
+            await m.answer(
+                f"📡 <b>RAW AI RESPONSE:</b>\n\n<pre>{raw_safe}</pre>",
+                parse_mode="HTML",
+                reply_markup=main_kb()
+            )
+        await state.clear()
+    except Exception as e:
+        logging.error(f"err: {traceback.format_exc()}")
+        await m.answer(f"⚠️ <code>{esc(str(e))[:300]}</code>", parse_mode="HTML")
+
+
+# ═══════════════ ОТМЕНА ═══════════════
 @dp.message(F.text == "❌ Отмена")
 async def cancel(m: types.Message, state: FSMContext):
     await state.clear()
     await m.answer("❌ Отменено.", reply_markup=main_kb())
 
 
+# ═══════════════ КОМАНДЫ ═══════════════
 @dp.message(Command("stats"))
 async def cmd_stats(m: types.Message):
     s = get_stats()
