@@ -9,7 +9,6 @@ import sqlite3
 import traceback
 import aiohttp
 from datetime import datetime
-from collections import Counter
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -26,7 +25,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 AI_API_KEY = os.environ.get("AI_API_KEY")
 AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.groq.com/openai/v1")
-AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
+AI_MODEL = os.environ.get("AI_MODEL", "openai/gpt-oss-20b")
 
 if not BOT_TOKEN:
     raise ValueError("Не задан BOT_TOKEN!")
@@ -187,50 +186,72 @@ def check_grammar(text: str) -> dict:
 
 # ═══════════════ AI-ПРОМТ ═══════════════
 AI_SYSTEM_PROMPT = """Ты — опытный куратор GTA-ролевого проекта «GRAND» (Курганская ОПГ).
-Твоя задача — оценивать заявки на пост Лидера ОПГ строго, но справедливо, как это делал бы живой администратор.
+Твоя задача — оценивать заявки на пост Лидера ОПГ строго, но справедливо.
 
 ТРЕБОВАНИЯ К ЗАЯВКЕ:
 1. Возраст игрока 14+.
 2. Онлайн от 3 часов в сутки.
 3. Наличие Discord и микрофона.
-4. Биография должна быть развёрнутой (от 5 предложений), осмысленной и связанной с РП-миром проекта.
-5. Грамотная письменная речь, без капса, сленга и ошибок.
+4. Биография от 5 предложений, осмысленная, связанная с РП.
+5. Грамотная речь, без капса, сленга и ошибок.
 6. Адекватность, сдержанность.
-7. Знание правил проекта и своей сферы.
+7. Знание правил проекта.
 
-ТВОЯ ЗАДАЧА:
-Оценить ТОЛЬКО текст заявки по 6 критериям (0-100 каждый):
+Оцени текст заявки по 6 критериям (0-100 каждый):
 - grammar — грамотность
 - adequacy — адекватность тона
 - bio_meaning — осмысленность биографии
 - rp_match — соответствие РП-миру GTA
-- completeness — заполненность заявки
+- completeness — заполненность
 - overall — общая оценка
 
-Также:
-- Перечисли КОНКРЕТНЫЕ ошибки в тексте (5-15 штук): опечатки, неграмотные слова, повторы, капс, сленг.
-- Дай короткий вердикт (1-2 предложения).
+Также найди КОНКРЕТНЫЕ ошибки (5-15 штук): опечатки, неграмотные слова, повторы, капс, сленг.
 
-ВЕРНИ СТРОГО ВАЛИДНЫЙ JSON без комментариев и markdown:
+ОТВЕЧАЙ ТОЛЬКО ВАЛИДНЫМ JSON, БЕЗ MARKDOWN, БЕЗ ТЕКСТА ВОКРУГ. Формат ответа:
 {
-  "grammar": 0-100,
-  "adequacy": 0-100,
-  "bio_meaning": 0-100,
-  "rp_match": 0-100,
-  "completeness": 0-100,
-  "overall": 0-100,
+  "grammar": 0,
+  "adequacy": 0,
+  "bio_meaning": 0,
+  "rp_match": 0,
+  "completeness": 0,
+  "overall": 0,
   "errors": [
-    {"word": "неграмотное слово", "fix": "как правильно", "reason": "почему"}
+    {"word": "слово", "fix": "правильно", "reason": "почему"}
   ],
-  "verdict": "короткий вердикт на русском"
+  "verdict": "короткий вердикт"
 }
 
-ВАЖНО:
-- Оценивай строго.
-- Если био — набор слов или отписка, ставь bio_meaning ниже 40.
-- Если капс, сленг, куча ошибок — grammar ниже 50.
-- Если заявка неполная — completeness ниже 50.
-- Если грубые косяки (нет возраста, нет онлайна, био <5 предложений) — overall ниже 40."""
+Оценивай строго. Если био — набор слов или отписка, bio_meaning ниже 40.
+Если капс, сленг, куча ошибок — grammar ниже 50.
+Если заявка неполная — completeness ниже 50.
+Если нет возраста / нет онлайна / био меньше 5 предложений — overall ниже 40."""
+
+
+def clean_ai_response(raw: str) -> dict | None:
+    """Пытается вытащить JSON из ответа модели, даже если она обернула его в ```."""
+    if not raw:
+        return None
+
+    # Убираем markdown-обёртки ```json ... ```
+    cleaned = raw.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+
+    # Ищем первую { и последнюю }
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    snippet = cleaned[start:end + 1]
+
+    try:
+        return json.loads(snippet)
+    except json.JSONDecodeError:
+        # Пробуем починить одинарные кавычки
+        try:
+            return json.loads(snippet.replace("'", '"'))
+        except Exception:
+            return None
 
 
 async def ai_check(application_text: str):
@@ -244,7 +265,6 @@ async def ai_check(application_text: str):
                 {"role": "user", "content": f"Заявка:\n---\n{application_text[:5000]}\n---"},
             ],
             "temperature": 0.1,
-            "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
         async with aiohttp.ClientSession() as s:
@@ -254,7 +274,12 @@ async def ai_check(application_text: str):
                     logging.error(f"AI {r.status}: {await r.text()}")
                     return None
                 data = await r.json()
-        return json.loads(data["choices"][0]["message"]["content"])
+
+        content = data["choices"][0]["message"]["content"]
+        parsed = clean_ai_response(content)
+        if parsed is None:
+            logging.error(f"AI returned non-JSON: {content[:500]}")
+        return parsed
     except Exception as e:
         logging.error(f"AI error: {e}")
         return None
@@ -579,7 +604,6 @@ def build_card(data, reasons, status, grammar, ai_json):
             f"\n💬 <b>Вердикт AI:</b> <i>{verdict}</i>\n"
         )
 
-        # СЫРОЙ ОТВЕТ НЕЙРОНКИ
         raw_json = json.dumps(ai_json, ensure_ascii=False, indent=2)
         raw_safe = esc(raw_json)[:3500]
         ai_block += (
@@ -610,7 +634,7 @@ async def start(m: types.Message, state: FSMContext):
         "  • 🔁 Дубликаты\n"
         f"  • 📚 Грамотность (мин. {MIN_GRAMMAR}/100)\n"
         "  • ⚠️ Неграмотные слова\n"
-        "  • 🧠 AI-анализ (Groq, с полным RAW ответом)\n\n"
+        "  • 🧠 AI-анализ с полным RAW ответом\n\n"
         f"{ai}\n\n"
         "🐞 <b>/ai_debug</b> — показать только сырой ответ нейронки\n\n"
         f"{divider()}\n💡 Выбери действие 👇")
@@ -748,22 +772,41 @@ async def check_app_debug(m: types.Message, state: FSMContext):
             return
 
         wait = await m.answer("⏳ <b>Спрашиваю нейронку...</b>", parse_mode="HTML")
-        ai_json = await ai_check(text)
+
+        # Сырой запрос — не парсим JSON, показываем, что ответила модель
+        payload = {
+            "model": AI_MODEL,
+            "messages": [
+                {"role": "system", "content": AI_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Заявка:\n---\n{text[:5000]}\n---"},
+            ],
+            "temperature": 0.1,
+        }
+        headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
+        raw_content = None
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.post(f"{AI_BASE_URL}/chat/completions", headers=headers,
+                                  json=payload, timeout=45) as r:
+                    if r.status != 200:
+                        raw_content = f"HTTP {r.status}: {await r.text()}"
+                    else:
+                        data = await r.json()
+                        raw_content = data["choices"][0]["message"]["content"]
+        except Exception as e:
+            raw_content = f"Exception: {e}"
+
         try:
             await wait.delete()
         except:
             pass
 
-        if ai_json is None:
-            await m.answer("❌ Нейронка не ответила. Проверь логи Railway.")
-        else:
-            raw = json.dumps(ai_json, ensure_ascii=False, indent=2)
-            raw_safe = esc(raw)[:3800]
-            await m.answer(
-                f"📡 <b>RAW AI RESPONSE:</b>\n\n<pre>{raw_safe}</pre>",
-                parse_mode="HTML",
-                reply_markup=main_kb()
-            )
+        safe = esc(raw_content or "—")[:3800]
+        await m.answer(
+            f"📡 <b>RAW AI RESPONSE:</b>\n\n<pre>{safe}</pre>",
+            parse_mode="HTML",
+            reply_markup=main_kb()
+        )
         await state.clear()
     except Exception as e:
         logging.error(f"err: {traceback.format_exc()}")
