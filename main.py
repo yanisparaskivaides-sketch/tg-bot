@@ -25,8 +25,18 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Папка /tmp доступна на запись на Railway
 DB_PATH = "/tmp/applications.db"
+
+
+# ---------- HTML ЭКРАНИРОВАНИЕ ----------
+def esc(s) -> str:
+    """Безопасный текст для HTML-разметки Telegram."""
+    if s is None:
+        return ""
+    return (str(s)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;"))
 
 
 # ---------- БАЗА ----------
@@ -170,8 +180,8 @@ def make_verdict(data: dict, duplicate) -> tuple:
     if duplicate and len(duplicate) >= 4:
         reasons.append(
             f"🔁 <b>Дубликат</b> — уже подавал: "
-            f"<b>{duplicate[0]}</b> (Discord: {duplicate[1]}), "
-            f"{duplicate[2]}, статус: {duplicate[3]}"
+            f"<b>{esc(duplicate[0])}</b> (Discord: {esc(duplicate[1])}), "
+            f"{esc(duplicate[2])}, статус: {esc(duplicate[3])}"
         )
 
     if data["bio_sentences"] < 5:
@@ -254,8 +264,8 @@ async def check_application(message: types.Message, state: FSMContext):
 
         info_block = (
             "📊 <b>РАСПОЗНАНО:</b>\n"
-            f"  ├ Ник: <b>{data['nickname'] or '—'}</b>\n"
-            f"  ├ Discord: <b>{data['discord'] or '—'}</b>\n"
+            f"  ├ Ник: <b>{esc(data['nickname']) or '—'}</b>\n"
+            f"  ├ Discord: <b>{esc(data['discord']) or '—'}</b>\n"
             f"  ├ Возраст: <b>{data['age'] if data['age'] else '—'}</b>\n"
             f"  ├ Онлайн: <b>{data['online'] if data['online'] else '—'}</b> ч\n"
             f"  └ Био: <b>{data['bio_sentences']}</b> предл. / <b>{data['bio_length']}</b> симв.\n\n"
@@ -276,8 +286,6 @@ async def check_application(message: types.Message, state: FSMContext):
         )
 
         result = header + info_block + reasons_block + footer
-
-        # Отправляем вердикт сразу, без "Проверяю..."
         await message.answer(result, parse_mode="HTML")
 
         user = message.from_user
@@ -289,14 +297,15 @@ async def check_application(message: types.Message, state: FSMContext):
         )
 
         if ADMIN_CHAT_ID:
+            safe_text = esc(text[:3000])
             admin_text = (
                 f"{header}"
-                f"👤 От: @{user.username or 'без_юз'} (<code>{user.id}</code>)\n\n"
+                f"👤 От: @{esc(user.username) or 'без_юз'} (<code>{user.id}</code>)\n\n"
                 f"{info_block}"
                 f"{reasons_block}"
                 f"━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📄 <b>Оригинал:</b>\n"
-                f"<blockquote>{text[:3000]}</blockquote>"
+                f"<blockquote>{safe_text}</blockquote>"
             )
             try:
                 await bot.send_message(
@@ -311,11 +320,10 @@ async def check_application(message: types.Message, state: FSMContext):
         await message.answer("💬 Кидай следующую заявку или /start.", reply_markup=main_kb())
 
     except Exception as e:
-        # Если что-то упало — показываем ошибку тебе
         err = traceback.format_exc()
         logging.error(f"check_application error:\n{err}")
         await message.answer(
-            f"⚠️ <b>Ошибка при проверке:</b>\n<code>{str(e)[:300]}</code>\n\n"
+            f"⚠️ <b>Ошибка при проверке:</b>\n<code>{esc(str(e))[:300]}</code>\n\n"
             f"Скинь этот текст разработчику.",
             parse_mode="HTML"
         )
@@ -330,7 +338,7 @@ async def cb_accept(call: CallbackQuery):
     except Exception:
         pass
     await call.message.reply(
-        f"✅ <b>Заявка одобрена</b> — @{call.from_user.username or call.from_user.id}",
+        f"✅ <b>Заявка одобрена</b> — @{esc(call.from_user.username) or call.from_user.id}",
         parse_mode="HTML"
     )
 
@@ -343,7 +351,7 @@ async def cb_reject(call: CallbackQuery):
     except Exception:
         pass
     await call.message.reply(
-        f"❌ <b>Заявка отклонена</b> — @{call.from_user.username or call.from_user.id}",
+        f"❌ <b>Заявка отклонена</b> — @{esc(call.from_user.username) or call.from_user.id}",
         parse_mode="HTML"
     )
 
@@ -367,7 +375,7 @@ async def stats(message: types.Message):
             parse_mode="HTML"
         )
     except Exception as e:
-        await message.answer(f"⚠️ Ошибка: {e}")
+        await message.answer(f"⚠️ Ошибка: {esc(e)}")
 
 
 @dp.message()
