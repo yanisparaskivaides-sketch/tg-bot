@@ -22,11 +22,11 @@ from aiogram.types import (
 )
 
 # ═══════════════ КОНФИГ ═══════════════
-BOT_TOKEN = "8822110606:AAEE0ps4NI5XK4YoGJrxOYSK1BCSk3LxBik"
-ADMIN_CHAT_ID = -1003709542377
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_CHAT_ID = os.environ.get("ADMIN_CHAT_ID")
 AI_API_KEY = os.environ.get("AI_API_KEY")
-AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.openai.com/v1")
-AI_MODEL = os.environ.get("AI_MODEL", "gpt-4o-mini")
+AI_BASE_URL = os.environ.get("AI_BASE_URL", "https://api.groq.com/openai/v1")
+AI_MODEL = os.environ.get("AI_MODEL", "llama-3.3-70b-versatile")
 
 if not BOT_TOKEN:
     raise ValueError("Не задан BOT_TOKEN!")
