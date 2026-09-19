@@ -41,6 +41,7 @@ MIN_ONLINE = 3
 MIN_BIO_SENT = 5
 MIN_BIO_LEN = 200
 MIN_GRAMMAR = 50
+MIN_AI = 50
 
 
 # ═══════════════ УТИЛИТЫ ═══════════════
@@ -58,153 +59,205 @@ def divider() -> str:
     return "━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 
-# ═══════════════ ПОДСЧЁТ ПРЕДЛОЖЕНИЙ ═══════════════
 def count_sentences(text: str) -> int:
-    """Считает предложения: делит по . ! ? … и переносам, отбрасывает короткие обрывки."""
     if not text:
         return 0
     t = text.replace("...", "…").replace("..", ".")
     parts = re.split(r"[.!?…\n]+", t)
-    sentences = [p.strip() for p in parts if len(p.strip()) >= 3]
-    return len(sentences)
+    return len([p for p in parts if len(p.strip()) >= 3])
 
 
-# ═══════════════ ПРОВЕРКА ГРАМОТНОСТИ ═══════════════
-COMMON_WORDS = {
-    "и","в","во","не","что","он","на","я","с","со","как","а","то","все","она","так","его",
-    "но","да","ты","к","у","же","вы","за","бы","по","только","ее","мне","было","вот","от",
-    "меня","еще","нет","о","из","ему","теперь","когда","даже","ну","вдруг","ли","если",
-    "уже","или","ни","быть","был","него","до","вас","нибудь","опять","уж","вам","ведь",
-    "там","потом","себя","ничего","ей","может","они","тут","где","есть","надо","ней",
-    "для","мы","тебя","их","чем","была","сам","чтоб","без","будто","чего","раз","тоже",
-    "себе","под","будет","ж","тогда","кто","этот","того","потому","этого","какой","совсем",
-    "ним","здесь","этом","один","почти","мой","тем","чтобы","нее","сейчас","были","куда",
-    "зачем","сказать","всех","никогда","сегодня","можно","при","наконец","два","об","другой",
-    "хоть","после","над","больше","тот","через","эти","нас","про","всего","них","какая",
-    "много","разве","три","эту","моя","впрочем","хорошо","свою","этой","перед","иногда",
-    "лучше","чуть","том","нельзя","такой","им","более","всегда","конечно","всю","между",
-    "игра","игры","игрок","персонаж","биография","возраст","онлайн","дискорд","правила",
-    "проект","сервер","лидер","опг","пост","заявка","ник","скриншот","статистика",
-    "является","имеет","может","будет","имею","хочу","могу","буду","стал","стать","играю",
+# ═══════════════ СЛОВАРЬ ОШИБОК ═══════════════
+COMMON_TYPOS = {
+    "жызнь": "жизнь", "жывот": "живот", "жызни": "жизни",
+    "шына": "шина", "машына": "машина", "жыть": "жить",
+    "чясть": "часть", "щястье": "счастье", "чяй": "чай",
+    "чясто": "часто",
+    "ихний": "их", "евонный": "его", "ейный": "её",
+    "ложить": "класть", "ложу": "кладу",
+    "одел": "надел", "одела": "надела",
+    "извени": "извини", "извените": "извините",
+    "здарова": "здорово", "здраствуй": "здравствуй",
+    "приветсвую": "приветствую",
+    "сдесь": "здесь", "зделать": "сделать", "зделал": "сделал",
+    "здать": "сдать", "здал": "сдал",
+    "вообщем": "в общем", "вобщем": "в общем",
+    "корче": "короче",
+    "щас": "сейчас", "ща": "сейчас",
+    "че": "что", "шо": "что", "чё": "что",
+    "норм": "нормально",
+    "плиз": "пожалуйста", "пж": "пожалуйста",
+    "спс": "спасибо",
+    "тян": "тянется", "збс": "отлично",
+    "кст": "кстати",
 }
 
+CAPS_WORDS = ["ору", "ахахах", "ахаха", "хахаха", "лол", "кек", "ржу", "кринж"]
 
+
+# ═══════════════ ПОИСК НЕГРАМОТНЫХ СЛОВ ═══════════════
+def find_typos(text: str) -> list:
+    issues = []
+    lower = text.lower()
+    words = re.findall(r"[а-яёa-z]+", lower)
+    seen = set()
+
+    for w in words:
+        if w in COMMON_TYPOS and w not in seen:
+            issues.append({"word": w, "reason": "типичная ошибка",
+                           "suggest": COMMON_TYPOS[w]})
+            seen.add(w)
+
+    for w in words:
+        if w in CAPS_WORDS and w not in seen:
+            issues.append({"word": w, "reason": "сленг",
+                           "suggest": "убери сленг в заявке"})
+            seen.add(w)
+
+    for m in re.finditer(r"\b([а-яёa-z])\1{2,}\w*", lower):
+        w = m.group(0)
+        if w not in seen:
+            issues.append({"word": w, "reason": "растягивание букв",
+                           "suggest": w[0] + w[0]})
+            seen.add(w)
+
+    for i in range(len(words) - 1):
+        if words[i] == words[i + 1] and len(words[i]) > 2 and words[i] not in seen:
+            issues.append({"word": f"{words[i]} {words[i]}",
+                           "reason": "повтор слова", "suggest": words[i]})
+            seen.add(words[i])
+
+    for m in re.finditer(r"\b\w*(?:жы|шы|чя|щя|щю|чю)\w*\b", lower):
+        w = m.group(0)
+        if w not in seen and w not in COMMON_TYPOS:
+            fixed = (w.replace("жы", "жи").replace("шы", "ши")
+                     .replace("чя", "ча").replace("щя", "ща")
+                     .replace("щю", "щу").replace("чю", "чу"))
+            issues.append({"word": w, "reason": "ошибка жи/ши, ча/ща",
+                           "suggest": fixed})
+            seen.add(w)
+
+    return issues[:15]
+
+
+# ═══════════════ ГРАМОТНОСТЬ (свой алгоритм) ═══════════════
 def check_grammar(text: str) -> dict:
-    """Возвращает {'score': 0-100, 'issues': [...]}"""
     if not text or len(text.strip()) < 20:
-        return {"score": 0, "issues": ["Текст слишком короткий для проверки"]}
+        return {"score": 0, "issues": ["Текст слишком короткий"], "typos": []}
 
     issues = []
+    typos = find_typos(text)
     score = 100
+    score -= min(len(typos) * 4, 40)
 
     letters = [c for c in text if c.isalpha()]
     if letters:
         upper_ratio = sum(1 for c in letters if c.isupper()) / len(letters)
         if upper_ratio > 0.6:
             issues.append("Много заглавных букв (капс)")
-            score -= 25
+            score -= 20
 
     sentences_raw = re.split(r"[.!?…\n]+", text)
-    long_sentences = [s.strip() for s in sentences_raw if len(s.strip()) > 100]
-    if long_sentences:
-        issues.append(f"Слишком длинные предложения без точек ({len(long_sentences)} шт.)")
-        score -= 10 * min(len(long_sentences), 3)
+    long_s = [s.strip() for s in sentences_raw if len(s.strip()) > 150]
+    if long_s:
+        issues.append(f"Слишком длинные предложения ({len(long_s)} шт.) без точек")
+        score -= 5 * min(len(long_s), 3)
 
-    words = re.findall(r"[а-яёa-z]{3,}", text.lower())
-    if words:
-        counter = Counter(words)
-        repeats = [(w, c) for w, c in counter.most_common(5) if c > 5]
-        if repeats:
-            top = ", ".join(f"«{w}» ×{c}" for w, c in repeats[:3])
-            issues.append(f"Повторяющиеся слова: {top}")
-            score -= 5 * len(repeats)
-
-    typo_patterns = [
-        (r"\bжы\b|\bшы\b", "«жы/шы» — пиши «жи/ши»"),
-        (r"\bчя\b|\bщя\b", "«чя/щя» — пиши «ча/ща»"),
-        (r"\bне\s+[а-яё]+ться\b", "Возможно «-ться/-тся» написано неверно"),
-        (r"\bчто\s*бы\b", "«что бы» — проверь, не «чтобы» ли"),
-    ]
-    for pat, msg in typo_patterns:
-        if re.search(pat, text.lower()):
-            issues.append(msg)
-            score -= 5
-
-    if re.search(r"([а-яёa-z])\1{2,}", text.lower()):
-        issues.append("Опечатки/растягивание букв (ааа, еее)")
-        score -= 10
-
-    for s in sentences_raw:
-        s = s.strip()
-        if len(s) > 10 and s[0].islower():
-            issues.append("Предложения с маленькой буквы")
-            score -= 5
-            break
+    if not re.search(r"[.!?…]", text):
+        issues.append("Нет знаков завершения предложений (. ! ?)")
+        score -= 20
 
     punct = len(re.findall(r"[,.!?;:…]", text))
     if len(text) > 200 and punct < 3:
         issues.append("Мало знаков препинания")
         score -= 15
 
-    if words:
-        unknown = [w for w in words if w not in COMMON_WORDS and len(w) > 4]
-        unknown_ratio = len(unknown) / len(words)
-        if unknown_ratio > 0.85:
-            issues.append("Текст содержит много непонятных/выдуманных слов")
-            score -= 15
-        elif unknown_ratio > 0.7:
-            issues.append("Много нестандартных слов")
+    for s in sentences_raw:
+        s = s.strip()
+        if len(s) > 10 and s[0].islower():
+            issues.append("Есть предложения с маленькой буквы")
             score -= 5
-
-    if not re.search(r"[.!?…]", text):
-        issues.append("Нет знаков завершения предложений (. ! ?)")
-        score -= 20
+            break
 
     score = max(0, min(100, score))
     if not issues:
-        issues = ["Грамматика в порядке ✅"]
-    return {"score": score, "issues": issues}
+        issues = ["Основные правила соблюдены ✅"]
+    return {"score": score, "issues": issues, "typos": typos}
 
 
-# ═══════════════ AI ═══════════════
-AI_PROMPT = """Ты — строгий проверяющий заявок на пост Лидера ОПГ в GTA-ролевом проекте.
-Оцени заявку по критериям: грамотность, адекватность, осмысленность био, РП-соответствие.
-Верни СТРОГО JSON:
-{{"score": 0-100, "grammar_ok": true/false, "adequate": true/false,
- "bio_meaningful": true/false, "rp_match": true/false, "comment": "до 200 символов на русском"}}
+# ═══════════════ AI-ПРОМТ ═══════════════
+AI_SYSTEM_PROMPT = """Ты — опытный куратор GTA-ролевого проекта «GRAND» (Курганская ОПГ).
+Твоя задача — оценивать заявки на пост Лидера ОПГ строго, но справедливо, как это делал бы живой администратор.
 
-Текст заявки:
----
-{application}
----"""
+ТРЕБОВАНИЯ К ЗАЯВКЕ:
+1. Возраст игрока 14+.
+2. Онлайн от 3 часов в сутки.
+3. Наличие Discord и микрофона.
+4. Биография должна быть развёрнутой (от 5 предложений), осмысленной и связанной с РП-миром проекта.
+5. Грамотная письменная речь, без капса, сленга и ошибок.
+6. Адекватность, сдержанность.
+7. Знание правил проекта и своей сферы.
+
+ТВОЯ ЗАДАЧА:
+Оценить ТОЛЬКО текст заявки по 6 критериям (0-100 каждый):
+- grammar — грамотность (орфография, пунктуация, капс, сленг)
+- adequacy — адекватность тона (нет агрессии, оскорблений, бессмыслицы)
+- bio_meaning — осмысленность биографии (связность, логика, РП)
+- rp_match — соответствие РП-миру GTA (реалистично ли для лидера ОПГ)
+- completeness — заполненность заявки (все ли пункты)
+- overall — общая оценка
+
+Также:
+- Перечисли КОНКРЕТНЫЕ ошибки в тексте (5-15 штук): опечатки, неграмотные слова, повторы, капс, сленг. Указывай слово, как правильно, и причину.
+- Дай короткий вердикт (1-2 предложения).
+
+ВЕРНИ СТРОГО ВАЛИДНЫЙ JSON без комментариев и markdown:
+{
+  "grammar": 0-100,
+  "adequacy": 0-100,
+  "bio_meaning": 0-100,
+  "rp_match": 0-100,
+  "completeness": 0-100,
+  "overall": 0-100,
+  "errors": [
+    {"word": "неграмотное слово", "fix": "как правильно", "reason": "почему"}
+  ],
+  "verdict": "короткий вердикт на русском"
+}
+
+ВАЖНО:
+- Оценивай строго. Если био — набор слов или отписка, ставь bio_meaning ниже 40.
+- Если в тексте капс, сленг, куча ошибок — grammar ниже 50.
+- Если заявка неполная — completeness ниже 50.
+- Общая оценка overall — это средневзвешенное, но если есть грубые косяки (нет возраста, нет онлайна, био <5 предложений) — overall ниже 40.
+- Текст заявки может быть на русском. Отвечай тоже на русском, но JSON-ключи оставь английскими."""
 
 
 async def ai_check(application_text: str):
     if not AI_API_KEY:
-        return None, None, None
+        return None
     try:
         payload = {
             "model": AI_MODEL,
             "messages": [
-                {"role": "system", "content": "Ты возвращаешь только валидный JSON."},
-                {"role": "user", "content": AI_PROMPT.format(application=application_text[:4000])},
+                {"role": "system", "content": AI_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Заявка:\n---\n{application_text[:5000]}\n---"},
             ],
-            "temperature": 0.2,
+            "temperature": 0.1,
             "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
         async with aiohttp.ClientSession() as s:
             async with s.post(f"{AI_BASE_URL}/chat/completions", headers=headers,
-                              json=payload, timeout=30) as r:
+                              json=payload, timeout=45) as r:
                 if r.status != 200:
                     logging.error(f"AI {r.status}: {await r.text()}")
-                    return None, None, None
+                    return None
                 data = await r.json()
-        parsed = json.loads(data["choices"][0]["message"]["content"])
-        return int(parsed.get("score", 0)), parsed.get("comment", ""), parsed
+        return json.loads(data["choices"][0]["message"]["content"])
     except Exception as e:
         logging.error(f"AI error: {e}")
-        return None, None, None
+        return None
 
 
 # ═══════════════ БАЗА ═══════════════
@@ -219,8 +272,8 @@ def init_db():
                 nickname TEXT, discord TEXT,
                 age INTEGER, online TEXT,
                 bio_sentences INTEGER, bio_length INTEGER,
-                grammar_score INTEGER, grammar_issues TEXT,
-                ai_score INTEGER, ai_comment TEXT,
+                grammar_score INTEGER, grammar_issues TEXT, grammar_typos TEXT,
+                ai_score INTEGER, ai_json TEXT,
                 verdict TEXT, reason TEXT, applied_at TEXT
             )""")
         conn.commit()
@@ -246,19 +299,22 @@ def find_duplicate(nickname, discord):
         return None
 
 
-def save_application(user, data, verdict, reason, grammar_score, grammar_issues, ai_score, ai_comment):
+def save_application(user, data, verdict, reason, grammar, ai_json):
     try:
         conn = sqlite3.connect(DB_PATH)
         cur = conn.cursor()
+        typos_str = "; ".join(f"{t['word']}→{t['suggest']}" for t in grammar.get("typos", []))[:500]
+        ai_score = ai_json.get("overall", 0) if ai_json else 0
         cur.execute(
             "INSERT INTO applications (telegram_id, username, nickname, discord, age, online, "
-            "bio_sentences, bio_length, grammar_score, grammar_issues, ai_score, ai_comment, "
-            "verdict, reason, applied_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "bio_sentences, bio_length, grammar_score, grammar_issues, grammar_typos, "
+            "ai_score, ai_json, verdict, reason, applied_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user.id, user.username or "", data["nickname"], data["discord"],
              data["age"] or 0, str(data["online"] or ""),
              data["bio_sentences"], data["bio_length"],
-             grammar_score, "; ".join(grammar_issues)[:300],
-             ai_score or 0, ai_comment or "",
+             grammar["score"], "; ".join(grammar["issues"])[:300], typos_str,
+             ai_score, json.dumps(ai_json, ensure_ascii=False)[:1000] if ai_json else "",
              verdict, "; ".join(reason)[:500], now_str()))
         conn.commit()
         conn.close()
@@ -337,15 +393,6 @@ def cancel_kb():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="❌ Отмена")]], resize_keyboard=True)
 
 
-def admin_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Принять", callback_data="accept"),
-         InlineKeyboardButton(text="❌ Отклонить", callback_data="reject")],
-        [InlineKeyboardButton(text="📊 Стата", callback_data="stats"),
-         InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
-    ])
-
-
 def back_kb():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🏠 В меню", callback_data="menu")]])
 
@@ -418,7 +465,7 @@ def parse_application(text: str) -> dict:
 
 
 # ═══════════════ ВЕРДИКТ ═══════════════
-def make_verdict(data, duplicate, grammar, ai_score):
+def make_verdict(data, duplicate, grammar, ai_json):
     reasons = []
     hard_fail = False
 
@@ -456,9 +503,11 @@ def make_verdict(data, duplicate, grammar, ai_score):
         reasons.append(f"📚 <b>Грамотность: {grammar['score']}/100</b> — низкая")
         hard_fail = True
 
-    if ai_score is not None and ai_score < 50:
-        reasons.append(f"🧠 <b>AI: {ai_score}/100</b> — низкая оценка")
-        hard_fail = True
+    if ai_json:
+        overall = ai_json.get("overall", 0)
+        if overall < MIN_AI:
+            reasons.append(f"🧠 <b>AI: {overall}/100</b> — низкая оценка")
+            hard_fail = True
 
     if hard_fail:
         return "🔴", reasons, "НЕ ПОДХОДИТ"
@@ -466,7 +515,7 @@ def make_verdict(data, duplicate, grammar, ai_score):
 
 
 # ═══════════════ КАРТОЧКА ═══════════════
-def build_card(data, reasons, status, grammar, ai_score, ai_comment):
+def build_card(data, reasons, status, grammar, ai_json):
     if status.startswith("ПОДХОДИТ"):
         header = ("╔════════════════════════════╗\n"
                   "  🟢 <b>ЗАЯВКА ПОДХОДИТ</b> 🟢\n"
@@ -484,32 +533,60 @@ def build_card(data, reasons, status, grammar, ai_score, ai_comment):
             f"  ├ Возраст: <b>{data['age'] if data['age'] else '—'}</b>\n"
             f"  ├ Онлайн: <b>{data['online'] if data['online'] else '—'}</b> ч\n"
             f"  ├ Био: <b>{data['bio_sentences']}</b> предл. / <b>{data['bio_length']}</b> симв.\n"
-            f"  └ Грамматика: <b>{grammar['score']}/100</b>\n\n")
+            f"  └ Грамматика (свой): <b>{grammar['score']}/100</b>\n\n")
 
     if status.startswith("НЕ ПОДХОДИТ"):
         rb = "❌ <b>ПРИЧИНЫ:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
     else:
         rb = "✅ <b>ПРОШЛО:</b>\n" + "\n".join(f"  • {r}" for r in reasons) + "\n"
 
-    g_block = ""
-    if grammar["issues"] and grammar["issues"] != ["Грамматика в порядке ✅"]:
-        g_list = "\n".join(f"  • {esc(i)}" for i in grammar["issues"][:5])
-        g_block = f"\n📚 <b>ЗАМЕЧАНИЯ ПО ГРАМОТНОСТИ:</b>\n{g_list}\n"
+    typo_block = ""
+    typos = grammar.get("typos", [])
+    if typos:
+        lines = []
+        for t in typos[:10]:
+            w = esc(t["word"])
+            sug = esc(t["suggest"])
+            reason = esc(t["reason"])
+            lines.append(f"  ⚠️ <code>{w}</code> → <b>{sug}</b> <i>({reason})</i>")
+        typo_block = "\n📚 <b>НЕГРАМОТНЫЕ СЛОВА (свой алгоритм):</b>\n" + "\n".join(lines) + "\n"
 
     ai_block = ""
-    if ai_score is not None:
-        ai_block = (f"\n🧠 <b>AI-ОЦЕНКА:</b> <b>{ai_score}/100</b>\n"
-                    f"<i>{esc(ai_comment)[:300] if ai_comment else ''}</i>\n")
+    if ai_json:
+        errs = ai_json.get("errors", [])
+        errs_lines = ""
+        if errs:
+            errs_lines = "\n🧠 <b>ОШИБКИ ОТ AI:</b>\n"
+            for e in errs[:15]:
+                w = esc(e.get("word", ""))
+                f = esc(e.get("fix", ""))
+                r = esc(e.get("reason", ""))
+                errs_lines += f"  ⚠️ <code>{w}</code> → <b>{f}</b>\n      <i>{r}</i>\n"
+        else:
+            errs_lines = "\n🧠 <b>AI не нашёл явных ошибок</b> ✅\n"
+
+        verdict = esc(ai_json.get("verdict", ""))
+        ai_block = (
+            "\n🧠 <b>AI-ОЦЕНКА:</b>\n"
+            f"  ├ Общая: <b>{ai_json.get('overall', 0)}/100</b>\n"
+            f"  ├ Грамотность: <b>{ai_json.get('grammar', 0)}/100</b>\n"
+            f"  ├ Адекватность: <b>{ai_json.get('adequacy', 0)}/100</b>\n"
+            f"  ├ Осмысленность био: <b>{ai_json.get('bio_meaning', 0)}/100</b>\n"
+            f"  ├ РП-соответствие: <b>{ai_json.get('rp_match', 0)}/100</b>\n"
+            f"  └ Полнота: <b>{ai_json.get('completeness', 0)}/100</b>\n"
+            f"{errs_lines}"
+            f"\n💬 <b>Вердикт AI:</b> <i>{verdict}</i>\n"
+        )
 
     footer = f"\n{divider()}\n🤖 <i>Решение вынесено автоматически.</i>"
-    return header + info + rb + g_block + ai_block + footer
+    return header + info + rb + typo_block + ai_block + footer
 
 
 # ═══════════════ ХЕНДЛЕРЫ ═══════════════
 @dp.message(CommandStart())
 async def start(m: types.Message, state: FSMContext):
     await state.clear()
-    ai = "🧠 AI: <b>включён</b>" if AI_API_KEY else "🧠 AI: <b>выключен</b> (грамотность — свой алгоритм)"
+    ai = "🧠 AI: <b>включён</b>" if AI_API_KEY else "🧠 AI: <b>выключен</b>"
     text = (
         "╔════════════════════════════╗\n"
         "     🎯 <b>ПРОВЕРКА ЗАЯВОК ОПГ</b> 🎯\n"
@@ -521,7 +598,9 @@ async def start(m: types.Message, state: FSMContext):
         f"  • ⏰ Онлайн {MIN_ONLINE}+ часов\n"
         "  • 📋 Все обязательные пункты\n"
         "  • 🔁 Дубликаты\n"
-        f"  • 📚 Грамотность (мин. {MIN_GRAMMAR}/100)\n\n"
+        f"  • 📚 Грамотность (мин. {MIN_GRAMMAR}/100)\n"
+        "  • ⚠️ Показываю неграмотные слова\n"
+        "  • 🧠 AI-анализ (Groq)\n\n"
         f"{ai}\n\n{divider()}\n💡 Выбери действие 👇")
     await m.answer(text, parse_mode="HTML", reply_markup=main_kb())
 
@@ -575,9 +654,9 @@ async def cb_help(c: CallbackQuery):
             "1️⃣ Нажми «📝 Проверить заявку»\n"
             "2️⃣ Скопируй заявку из Discord\n"
             "3️⃣ Отправь боту одним сообщением\n"
-            "4️⃣ Бот скажет: ПОДХОДИТ или НЕ ПОДХОДИТ\n\n"
-            "📚 <b>Грамотность:</b> бот проверяет капс, повторы, опечатки, "
-            "«жы/шы», «чя/щя», длину предложений, знаки препинания.")
+            "4️⃣ Бот + нейронка вынесут вердикт\n\n"
+            "📚 <b>Проверяется:</b> био, возраст, онлайн, дубликаты, "
+            "грамотность и AI-анализ.")
     await c.message.answer(text, parse_mode="HTML", reply_markup=back_kb())
 
 
@@ -589,15 +668,16 @@ async def check_app(m: types.Message, state: FSMContext):
             await m.answer("❌ Слишком коротко.")
             return
 
-        wait = await m.answer("⏳ <b>Проверяю...</b>", parse_mode="HTML")
+        wait = await m.answer(
+            "⏳ <b>Проверяю заявку...</b>\n<i>Нейронка анализирует текст, подожди ~5 сек.</i>",
+            parse_mode="HTML"
+        )
 
         data = parse_application(text)
         duplicate = find_duplicate(data["nickname"], data["discord"])
         grammar = check_grammar(text)
-        ai_score, ai_comment, _ = await ai_check(text) if AI_API_KEY else (None, None, None)
-
-        emoji, reasons, status = make_verdict(data, duplicate, grammar, ai_score)
-        card = build_card(data, reasons, status, grammar, ai_score, ai_comment)
+        ai_json = await ai_check(text) if AI_API_KEY else None        emoji, reasons, status = make_verdict(data, duplicate, grammar, ai_json)
+        card = build_card(data, reasons, status, grammar, ai_json)
 
         try:
             await wait.delete()
@@ -605,8 +685,7 @@ async def check_app(m: types.Message, state: FSMContext):
             pass
         await m.answer(card, parse_mode="HTML", reply_markup=main_kb())
 
-        save_application(m.from_user, data, status, reasons,
-                         grammar["score"], grammar["issues"], ai_score, ai_comment)
+        save_application(m.from_user, data, status, reasons, grammar, ai_json)
 
         if ADMIN_CHAT_ID:
             safe = esc(text[:3500])
@@ -616,7 +695,7 @@ async def check_app(m: types.Message, state: FSMContext):
                           f"📄 <b>Оригинал:</b>\n<blockquote>{safe}</blockquote>")
             try:
                 await bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_text,
-                                       parse_mode="HTML", reply_markup=admin_kb())
+                                       parse_mode="HTML")
             except Exception as e:
                 logging.error(f"admin: {e}")
 
@@ -624,32 +703,6 @@ async def check_app(m: types.Message, state: FSMContext):
     except Exception as e:
         logging.error(f"err: {traceback.format_exc()}")
         await m.answer(f"⚠️ <code>{esc(str(e))[:300]}</code>", parse_mode="HTML")
-
-
-@dp.callback_query(F.data == "accept")
-async def cb_accept(c: CallbackQuery):
-    await c.answer("✅")
-    try:
-        await c.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
-    await c.message.reply(
-        f"✅ <b>Принято</b> — @{esc(c.from_user.username) or c.from_user.id}",
-        parse_mode="HTML"
-    )
-
-
-@dp.callback_query(F.data == "reject")
-async def cb_reject(c: CallbackQuery):
-    await c.answer("❌")
-    try:
-        await c.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
-    await c.message.reply(
-        f"❌ <b>Отклонено</b> — @{esc(c.from_user.username) or c.from_user.id}",
-        parse_mode="HTML"
-    )
 
 
 @dp.message(F.text == "❌ Отмена")
