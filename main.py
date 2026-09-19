@@ -676,7 +676,8 @@ async def check_app(m: types.Message, state: FSMContext):
         data = parse_application(text)
         duplicate = find_duplicate(data["nickname"], data["discord"])
         grammar = check_grammar(text)
-        ai_json = await ai_check(text) if AI_API_KEY else None        emoji, reasons, status = make_verdict(data, duplicate, grammar, ai_json)
+        ai_json = await ai_check(text) if AI_API_KEY else None
+        emoji, reasons, status = make_verdict(data, duplicate, grammar, ai_json)
         card = build_card(data, reasons, status, grammar, ai_json)
 
         try:
